@@ -1,6 +1,6 @@
 # Find blunders in (fishtest) pgn data
 
-Given a set of .pgn(.gz) files with engine evaluations, find for each the final
+Given a set of .pgn(.gz) files with engine evaluations, find for each game the final
 blunder from a clearly winning position.
 
 Example usage:
