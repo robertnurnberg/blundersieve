@@ -42,9 +42,11 @@ namespace analysis {
 class Analyze : public pgn::Visitor {
 public:
   Analyze(std::string_view file, const std::string &regex_engine,
-          int eval_before, int eval_after, std::mutex &progress_output)
-      : file(file), regex_engine(regex_engine),
-        eval_before(eval_before), eval_after(eval_after), progress_output(progress_output) {}
+          int eval_before, int eval_after, bool agree_before,
+          std::mutex &progress_output)
+      : file(file), regex_engine(regex_engine), eval_before(eval_before),
+        eval_after(eval_after), agree_before(agree_before),
+        progress_output(progress_output) {}
 
   virtual ~Analyze() {}
 
@@ -114,22 +116,33 @@ public:
         if (match_eval[1] == 'M')
           eval = match_eval[0] == '+' ? 30001 : -30001;
         else
-          eval = std::clamp(int(100 * fast_stof(match_eval.data())), -30000, 30000);
+          eval = std::clamp(int(100 * fast_stof(match_eval.data())), -30000,
+                            30000);
         if (eval_triggered) {
           // previous move triggered blunder alert, now check if blundered
-          if (eval > - eval_after) {
+          if (eval > -eval_after) {
             found_blunder = true;
             board_blunder = board_trigger;
             eval_blunder = eval_trigger;
             move_blunder = move_trigger;
-          } else eval_triggered = false;
+          }
+          eval_triggered = false;
         }
-        if (eval > eval_before) {
-          eval_triggered = true;
-          board_trigger = board;
-          eval_trigger = eval;
-          move_trigger = uci::parseSan(board, move, moves);
+        if (!agree_before || eval2_triggered) {
+          // see if winning side thinks it is winning
+          if (eval > eval_before) {
+            eval_triggered = true;
+            board_trigger = board;
+            eval_trigger = eval;
+            move_trigger = uci::parseSan(board, move, moves);
+          } else
+            eval_triggered = false;
         }
+        if (agree_before && eval < -eval_before) {
+          // see if losing side agrees with won eval for opponent before blunder
+          eval2_triggered = true;
+        } else
+          eval2_triggered = false;
       }
     }
 
@@ -155,10 +168,7 @@ public:
       auto key = board_blunder.getFen();
       auto val = std::pair<int, Move>(eval_blunder, move_blunder);
       fen_map.lazy_emplace_l(
-          std::move(key),
-          [&](fen_map_t::value_type &p) {
-              p.second = val;
-          },
+          std::move(key), [&](fen_map_t::value_type &p) { p.second = val; },
           [&](const fen_map_t::constructor &ctor) {
             ctor(std::move(key), val);
           });
@@ -167,7 +177,7 @@ public:
     board.set960(false);
     board.setFen(constants::STARTPOS);
 
-    found_blunder = eval_triggered = false;
+    found_blunder = eval_triggered = eval2_triggered = false;
 
     filter_side = Color::NONE;
 
@@ -181,6 +191,7 @@ private:
   std::string_view file;
   const std::string &regex_engine;
   int eval_before, eval_after;
+  bool agree_before;
   std::mutex &progress_output;
 
   Board board;
@@ -195,22 +206,22 @@ private:
   std::string black;
 
   int whiteElo = 0, blackElo = 0;
-  bool found_blunder = false, eval_triggered = false;
+  bool found_blunder = false, eval_triggered = false, eval2_triggered = false;
   Board board_trigger, board_blunder;
   Move move_trigger, move_blunder;
   int eval_trigger, eval_blunder;
 };
 
 void ana_files(const std::vector<std::string> &files,
-               const std::string &regex_engine,
-               int eval_before, int eval_after,
-               std::mutex &progress_output) {
+               const std::string &regex_engine, int eval_before, int eval_after,
+               bool agree_before, std::mutex &progress_output) {
 
   for (const auto &file : files) {
     std::string move_counter;
     const auto pgn_iterator = [&](std::istream &iss) {
-      auto vis = std::make_unique<Analyze>(file, regex_engine, eval_before, eval_after,
-                                           progress_output);
+      auto vis =
+          std::make_unique<Analyze>(file, regex_engine, eval_before, eval_after,
+                                    agree_before, progress_output);
 
       pgn::StreamParser parser(iss);
 
@@ -401,8 +412,8 @@ public:
 };
 
 void process(const std::vector<std::string> &files_pgn,
-             const std::string &regex_engine,
-             int eval_before, int eval_after, int concurrency) {
+             const std::string &regex_engine, int eval_before, int eval_after,
+             bool agree_before, int concurrency) {
   // Create more chunks than threads to prevent threads from idling.
   int target_chunks = 4 * concurrency;
 
@@ -419,10 +430,10 @@ void process(const std::vector<std::string> &files_pgn,
 
   for (const auto &files : files_chunked) {
 
-    pool.enqueue([&files, &regex_engine, &eval_before, &eval_after, &progress_output,
-                  &files_chunked]() {
+    pool.enqueue([&files, &regex_engine, &eval_before, &eval_after,
+                  &agree_before, &progress_output, &files_chunked]() {
       analysis::ana_files(files, regex_engine, eval_before, eval_after,
-                          progress_output);
+                          agree_before, progress_output);
     });
   }
 
@@ -448,8 +459,9 @@ void print_usage(char const *program_name) {
     ss << "  --matchBook <regex>   Filter data based on book name" << "\n";
     ss << "  --matchBookInvert     Invert the filter" << "\n";
     ss << "  -o <path>             Path to output epd file (default: matesieve.epd)" << "\n";
-    ss << "  --evalBefore <cp>     Evaluation in cp before blunder. (default: 200)" << "\n";
-    ss << "  --evalAfter <cp>      Evaluation in cp after blunder. (default: 50)" << "\n";
+    ss << "  --evalBefore <cp>     Evaluation in cp before blunder (default: 200)" << "\n";
+    ss << "  --evalAfter <cp>      Evaluation in cp after blunder (default: 50)" << "\n";
+    ss << "  --agreeBefore         Require both engines' evaluations above evalBefore" << "\n";
     ss << "  --help                Print this help message" << "\n";
   // clang-format on
 
@@ -476,6 +488,10 @@ int main(int argc, char const *argv[]) {
 
   if (cmd.has_argument("--file")) {
     files_pgn = {cmd.get_argument("--file")};
+    if (!fs::exists(files_pgn[0])) {
+      std::cout << "Error: File not found: " << files_pgn[0] << std::endl;
+      std::exit(1);
+    }
   } else {
     auto path = cmd.get_argument("--dir", default_path);
 
@@ -555,6 +571,7 @@ int main(int argc, char const *argv[]) {
   if (cmd.has_argument("--evalAfter")) {
     eval_after = std::stoi(cmd.get_argument("--evalAfter"));
   }
+  bool agree_on_eval_before = cmd.has_argument("--agreeBefore", true);
 
   if (cmd.has_argument("-o")) {
     filename = cmd.get_argument("-o");
@@ -564,12 +581,14 @@ int main(int argc, char const *argv[]) {
 
   const auto t0 = std::chrono::high_resolution_clock::now();
 
-  process(files_pgn, regex_engine, eval_before, eval_after, concurrency);
+  process(files_pgn, regex_engine, eval_before, eval_after,
+          agree_on_eval_before, concurrency);
 
   for (const auto &pair : fen_map) {
     std::string fen = pair.first;
     auto board = Board(fen);
-    out_file << fen << " c0 \"eval: " << pair.second.first << ", blunder: " << pair.second.second << "\";\n";
+    out_file << fen << " c0 \"eval: " << pair.second.first
+             << ", blunder: " << pair.second.second << "\";\n";
   }
   out_file.close();
 
