@@ -29,8 +29,9 @@ Options:
   --matchBook <regex>   Filter data based on book name
   --matchBookInvert     Invert the filter
   -o <path>             Path to output epd file (default: matesieve.epd)
-  --evalBefore <cp>     Evaluation in cp before blunder. (default: 200)
-  --evalAfter <cp>      Evaluation in cp after blunder. (default: 50)
+  --evalBefore <cp>     Evaluation in cp before blunder (default: 200)
+  --evalAfter <cp>      Evaluation in cp after blunder (default: 50)
+  --agreeBefore         Require both engines' evaluations above evalBefore
   --help                Print this help message
 ```
 
