@@ -29,6 +29,9 @@ using fen_map_t = phmap::parallel_flat_hash_map<
     std::string, Statistics, std::hash<std::string>, std::equal_to<std::string>,
     std::allocator<std::pair<const std::string, Statistics>>, 8, std::mutex>;
 
+// map to hold move counters that cutechess-cli changed from original FENs
+using map_fens = std::unordered_map<std::string, std::pair<int, int>>;
+
 fen_map_t fen_map;
 
 // map to collect metadata for tests
@@ -42,11 +45,11 @@ namespace analysis {
 class Analyze : public pgn::Visitor {
 public:
   Analyze(std::string_view file, const std::string &regex_engine,
-          int eval_before, int eval_after, bool agree_before,
-          std::mutex &progress_output)
-      : file(file), regex_engine(regex_engine), eval_before(eval_before),
-        eval_after(eval_after), agree_before(agree_before),
-        progress_output(progress_output) {}
+          const map_fens &fixfen_map, int eval_before, int eval_after,
+          bool agree_before, std::mutex &progress_output)
+      : file(file), regex_engine(regex_engine), fixfen_map(fixfen_map),
+        eval_before(eval_before), eval_after(eval_after),
+        agree_before(agree_before), progress_output(progress_output) {}
 
   virtual ~Analyze() {}
 
@@ -55,7 +58,28 @@ public:
   void header(std::string_view key, std::string_view value) override {
 
     if (key == "FEN") {
-      board.setFen(value);
+      std::regex p("^(.+) 0 1$");
+      std::smatch match;
+      std::string value_str(value);
+
+      // revert changes by cutechess-cli to move counters
+      if (!fixfen_map.empty() && std::regex_search(value_str, match, p) &&
+          match.size() > 1) {
+        std::string fen = match[1];
+        auto it = fixfen_map.find(fen);
+
+        if (it == fixfen_map.end()) {
+          std::cerr << "While parsing " << file << " could not find FEN " << fen
+                    << " in fixFENsource." << std::endl;
+          std::exit(1);
+        }
+
+        const auto &fix = it->second;
+        std::string fixed_value = fen + " " + std::to_string(fix.first) + " " +
+                                  std::to_string(fix.second);
+        board.setFen(fixed_value);
+      } else
+        board.setFen(value);
     }
 
     if (key == "Variant" && value == "fischerandom") {
@@ -190,6 +214,7 @@ public:
 private:
   std::string_view file;
   const std::string &regex_engine;
+  const map_fens &fixfen_map;
   int eval_before, eval_after;
   bool agree_before;
   std::mutex &progress_output;
@@ -213,15 +238,16 @@ private:
 };
 
 void ana_files(const std::vector<std::string> &files,
-               const std::string &regex_engine, int eval_before, int eval_after,
-               bool agree_before, std::mutex &progress_output) {
+               const std::string &regex_engine, const map_fens &fixfen_map,
+               int eval_before, int eval_after, bool agree_before,
+               std::mutex &progress_output) {
 
   for (const auto &file : files) {
     std::string move_counter;
     const auto pgn_iterator = [&](std::istream &iss) {
       auto vis =
-          std::make_unique<Analyze>(file, regex_engine, eval_before, eval_after,
-                                    agree_before, progress_output);
+          std::make_unique<Analyze>(file, regex_engine, fixfen_map, eval_before,
+                                    eval_after, agree_before, progress_output);
 
       pgn::StreamParser parser(iss);
 
@@ -253,6 +279,49 @@ void ana_files(const std::vector<std::string> &files,
 }
 
 } // namespace analysis
+
+[[nodiscard]] map_fens get_fixfen(std::string file) {
+  map_fens fixfen_map;
+  if (file.empty()) {
+    return fixfen_map;
+  }
+
+  const auto fen_iterator = [&](std::istream &iss) {
+    std::string line;
+    while (std::getline(iss, line)) {
+      std::istringstream iss(line);
+      std::string f1, f2, f3, ep;
+      int halfmove, fullmove = 0;
+
+      iss >> f1 >> f2 >> f3 >> ep >> halfmove >> fullmove;
+
+      if (!fullmove)
+        continue;
+
+      auto key = f1 + ' ' + f2 + ' ' + f3 + ' ' + ep;
+      auto fixfen_data = std::pair<int, int>(halfmove, fullmove);
+
+      if (fixfen_map.find(key) != fixfen_map.end()) {
+        // for duplicate FENs, prefer the one with lower full move counter
+        if (fullmove < fixfen_map[key].second) {
+          fixfen_map[key] = fixfen_data;
+        }
+      } else {
+        fixfen_map[key] = fixfen_data;
+      }
+    }
+  };
+
+  if (file.size() >= 3 && file.substr(file.size() - 3) == ".gz") {
+    igzstream input(file.c_str());
+    fen_iterator(input);
+  } else {
+    std::ifstream input(file);
+    fen_iterator(input);
+  }
+
+  return fixfen_map;
+}
 
 [[nodiscard]] map_meta get_metadata(const std::vector<std::string> &file_list,
                                     bool allow_duplicates) {
@@ -412,8 +481,9 @@ public:
 };
 
 void process(const std::vector<std::string> &files_pgn,
-             const std::string &regex_engine, int eval_before, int eval_after,
-             bool agree_before, int concurrency) {
+             const std::string &regex_engine, const map_fens &fixfen_map,
+             int eval_before, int eval_after, bool agree_before,
+             int concurrency) {
   // Create more chunks than threads to prevent threads from idling.
   int target_chunks = 4 * concurrency;
 
@@ -430,10 +500,10 @@ void process(const std::vector<std::string> &files_pgn,
 
   for (const auto &files : files_chunked) {
 
-    pool.enqueue([&files, &regex_engine, &eval_before, &eval_after,
+    pool.enqueue([&files, &regex_engine, &fixfen_map, &eval_before, &eval_after,
                   &agree_before, &progress_output, &files_chunked]() {
-      analysis::ana_files(files, regex_engine, eval_before, eval_after,
-                          agree_before, progress_output);
+      analysis::ana_files(files, regex_engine, fixfen_map, eval_before,
+                          eval_after, agree_before, progress_output);
     });
   }
 
@@ -458,7 +528,8 @@ void print_usage(char const *program_name) {
     ss << "  --matchThreads <N>    Filter data based on used threads in metadata" << "\n";
     ss << "  --matchBook <regex>   Filter data based on book name" << "\n";
     ss << "  --matchBookInvert     Invert the filter" << "\n";
-    ss << "  -o <path>             Path to output epd file (default: matesieve.epd)" << "\n";
+    ss << "  -o <path>             Path to output epd file (default: blundersieve.epd)" << "\n";
+    ss << "  --fixFENsource        Patch move counters lost by cutechess-cli based on FENs in this file" << "\n";
     ss << "  --evalBefore <cp>     Evaluation in cp before blunder (default: 200)" << "\n";
     ss << "  --evalAfter <cp>      Evaluation in cp after blunder (default: 50)" << "\n";
     ss << "  --agreeBefore         Require both engines' evaluations above evalBefore" << "\n";
@@ -474,6 +545,7 @@ int main(int argc, char const *argv[]) {
   std::vector<std::string> files_pgn;
   std::string default_path = "./pgns";
   std::string regex_engine, regex_book, filename = "blundersieve.epd";
+  map_fens fixfen_map;
   int eval_before = 200, eval_after = 50;
   int concurrency = std::max(1, int(std::thread::hardware_concurrency()));
 
@@ -545,6 +617,9 @@ int main(int argc, char const *argv[]) {
     regex_engine = regex_rev;
   }
 
+  if (cmd.has_argument("--fixFENsource"))
+    fixfen_map = get_fixfen(cmd.get_argument("--fixFENsource"));
+
   if (cmd.has_argument("--matchEngine")) {
     regex_engine = cmd.get_argument("--matchEngine");
   }
@@ -581,7 +656,7 @@ int main(int argc, char const *argv[]) {
 
   const auto t0 = std::chrono::high_resolution_clock::now();
 
-  process(files_pgn, regex_engine, eval_before, eval_after,
+  process(files_pgn, regex_engine, fixfen_map, eval_before, eval_after,
           agree_on_eval_before, concurrency);
 
   for (const auto &pair : fen_map) {
