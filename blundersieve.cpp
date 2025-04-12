@@ -71,13 +71,13 @@ public:
         if (it == fixfen_map.end()) {
           std::cerr << "While parsing " << file << " could not find FEN " << fen
                     << " in fixFENsource." << std::endl;
-          std::exit(1);
+          board.setFen(value);
+        } else {
+          const auto &fix = it->second;
+          std::string fixed_value = fen + " " + std::to_string(fix.first) + " " +
+                                    std::to_string(fix.second);
+          board.setFen(fixed_value);
         }
-
-        const auto &fix = it->second;
-        std::string fixed_value = fen + " " + std::to_string(fix.first) + " " +
-                                  std::to_string(fix.second);
-        board.setFen(fixed_value);
       } else
         board.setFen(value);
     }
