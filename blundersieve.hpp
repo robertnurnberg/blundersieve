@@ -121,72 +121,71 @@ private:
   std::vector<std::string> args;
 };
 
-#if (defined(__clang__) && __clang_major__ < 20) || \
+#if (defined(__clang__) && __clang_major__ < 20) ||                            \
     !(defined(__GNUC__) && (__GNUC__ >= 11 && __GNUC_MINOR__ >= 1))
-/// @brief Custom stof implementation to avoid locale issues, once clang supports std::from_chars
-/// for floats this can be removed
+/// @brief Custom stof implementation to avoid locale issues, once clang
+/// supports std::from_chars for floats this can be removed
 /// @param str
 /// @return
 inline float fast_stof(std::string_view str) {
-    float result   = 0.0f;
-    int sign       = 1;
-    int decimal    = 0;
-    float fraction = 1.0f;
+  float result = 0.0f;
+  int sign = 1;
+  int decimal = 0;
+  float fraction = 1.0f;
 
-    const char *ptr = str.data();
-    const char *end = ptr + str.size();
+  const char *ptr = str.data();
+  const char *end = ptr + str.size();
 
-    // Handle sign
-    if (ptr < end && *ptr == '-') {
-        sign = -1;
-        ptr++;
-    } else if (ptr < end && *ptr == '+') {
-        ptr++;
-    }
+  // Handle sign
+  if (ptr < end && *ptr == '-') {
+    sign = -1;
+    ptr++;
+  } else if (ptr < end && *ptr == '+') {
+    ptr++;
+  }
 
-    // Convert integer part
+  // Convert integer part
+  while (ptr < end && *ptr >= '0' && *ptr <= '9') {
+    result = result * 10.0f + (*ptr - '0');
+    ptr++;
+  }
+
+  // Convert decimal part
+  if (ptr < end && *ptr == '.') {
+    ptr++;
     while (ptr < end && *ptr >= '0' && *ptr <= '9') {
-        result = result * 10.0f + (*ptr - '0');
-        ptr++;
+      result = result * 10.0f + (*ptr - '0');
+      fraction *= 10.0f;
+      ptr++;
     }
+    decimal = 1;
+  }
 
-    // Convert decimal part
-    if (ptr < end && *ptr == '.') {
-        ptr++;
-        while (ptr < end && *ptr >= '0' && *ptr <= '9') {
-            result = result * 10.0f + (*ptr - '0');
-            fraction *= 10.0f;
-            ptr++;
-        }
-        decimal = 1;
-    }
-
-    // Apply sign and adjust for decimal
-    result *= sign;
-    if (decimal) {
-        result /= fraction;
-    }
-    return result;
+  // Apply sign and adjust for decimal
+  result *= sign;
+  if (decimal) {
+    result /= fraction;
+  }
+  return result;
 }
 #else
 inline float fast_stof(std::string_view sw) {
-    if (sw[0] == '+') {
-        sw.remove_prefix(1);
-    }
+  if (sw[0] == '+') {
+    sw.remove_prefix(1);
+  }
 
-    float result;
-    const char *str_end  = sw.data() + sw.length();
-    const auto fc_result = std::from_chars(sw.data(), str_end, result);
+  float result;
+  const char *str_end = sw.data() + sw.length();
+  const auto fc_result = std::from_chars(sw.data(), str_end, result);
 
-    if (fc_result.ec == std::errc()) {
-        return result;
-    } else if (fc_result.ec == std::errc::invalid_argument) {
-        throw std::invalid_argument("Invalid float format");
-    } else if (fc_result.ec == std::errc::result_out_of_range) {
-        throw std::out_of_range("Float value out of range");
-    }
+  if (fc_result.ec == std::errc()) {
+    return result;
+  } else if (fc_result.ec == std::errc::invalid_argument) {
+    throw std::invalid_argument("Invalid float format");
+  } else if (fc_result.ec == std::errc::result_out_of_range) {
+    throw std::out_of_range("Float value out of range");
+  }
 
-    throw std::runtime_error("Unknown error in float conversion");
+  throw std::runtime_error("Unknown error in float conversion");
 }
 #endif
-

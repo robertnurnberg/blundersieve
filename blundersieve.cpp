@@ -74,8 +74,8 @@ public:
           board.setFen(value);
         } else {
           const auto &fix = it->second;
-          std::string fixed_value = fen + " " + std::to_string(fix.first) + " " +
-                                    std::to_string(fix.second);
+          std::string fixed_value = fen + " " + std::to_string(fix.first) +
+                                    " " + std::to_string(fix.second);
           board.setFen(fixed_value);
         }
       } else
