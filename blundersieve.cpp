@@ -153,7 +153,7 @@ public:
           eval_triggered = false;
         }
         if (!agree_before || eval2_triggered) {
-          // see if winning side thinks it is winning
+          // see if side to move thinks it is better
           if (eval > eval_before) {
             eval_triggered = true;
             board_trigger = board;
@@ -163,7 +163,7 @@ public:
             eval_triggered = false;
         }
         if (agree_before && eval < -eval_before) {
-          // see if losing side agrees with won eval for opponent before blunder
+          // see if "blundering" side agrees with won eval for opponent
           eval2_triggered = true;
         } else
           eval2_triggered = false;
