@@ -46,10 +46,10 @@ class Analyze : public pgn::Visitor {
 public:
   Analyze(std::string_view file, const std::string &regex_engine,
           const map_fens &fixfen_map, int eval_before, int eval_after,
-          bool agree_before, std::mutex &progress_output)
+          bool agree_before, int min_depth, std::mutex &progress_output)
       : file(file), regex_engine(regex_engine), fixfen_map(fixfen_map),
         eval_before(eval_before), eval_after(eval_after),
-        agree_before(agree_before), progress_output(progress_output) {}
+        agree_before(agree_before), min_depth(min_depth), progress_output(progress_output) {}
 
   virtual ~Analyze() {}
 
@@ -80,6 +80,8 @@ public:
         }
       } else
         board.setFen(value);
+
+      fen = value;
     }
 
     if (key == "Variant" && value == "fischerandom") {
@@ -130,44 +132,47 @@ public:
 
   void move(std::string_view move, std::string_view comment) override {
 
-    // openbench uses Nf3 {+0.57 17/28 583 363004}, fishtest Nf3 {+0.57/17}
-    const size_t delimiter_pos = comment.find_first_of(" /");
+    // fishtest uses Nf3 {+0.57/17 2.313s}
+    const size_t slash_pos = comment.find("/");
+    const size_t space_pos = comment.find(" ");
 
-    if (!do_filter || filter_side == board.sideToMove()) {
-      if (delimiter_pos != std::string::npos && comment != "book") {
-        const auto match_eval = comment.substr(0, delimiter_pos);
-        int eval;
-        if (match_eval[1] == 'M')
-          eval = match_eval[0] == '+' ? 30001 : -30001;
-        else
-          eval = std::clamp(int(100 * fast_stof(match_eval.data())), -30000,
-                            30000);
-        if (eval_triggered) {
-          // previous move triggered eval_before, now check if blundered
-          if (eval > -eval_after) {
-            found_blunder = true;
-            board_blunder = board_trigger;
-            eval_blunder = eval_trigger;
-            move_blunder = move_trigger;
-          }
-          eval_triggered = false;
+    if (slash_pos != std::string::npos && comment != "book") {
+      const auto match_eval = comment.substr(0, slash_pos);
+      int eval;
+      if (match_eval[1] == 'M')
+        eval = match_eval[0] == '+' ? 30001 : -30001;
+      else
+        eval = std::clamp(int(100 * fast_stof(match_eval.data())), -30000,
+                          30000);
+      const auto match_depth = comment.substr(slash_pos + 1, space_pos);
+      int depth = std::max(1, std::stoi(match_depth.data()));
+      if (eval_triggered) {
+        // previous move triggered eval_before, now check if blundered
+        if (eval > -eval_after && depth >= min_depth) {
+          found_blunder = true;
+          board_blunder = board_trigger;
+          eval_blunder = eval_trigger;
+          move_blunder = move_trigger;
         }
-        if (!agree_before || eval2_triggered) {
-          // see if "blundering" side thinks it is better
-          if (eval > eval_before) {
-            eval_triggered = true;
-            board_trigger = board;
-            eval_trigger = eval;
-            move_trigger = uci::parseSan(board, move, moves);
-          } else
-            eval_triggered = false;
-        }
-        if (agree_before && eval < -eval_before) {
-          // see if opponent agrees with eval before blunder
-          eval2_triggered = true;
-        } else
-          eval2_triggered = false;
+        eval_triggered = false;
       }
+      if (!agree_before || eval2_triggered) {
+        // see if "blundering" side thinks it is better
+        // only check for blunders by matchEngine, if given
+        if (eval > eval_before && depth >= min_depth &&
+            (!do_filter || filter_side == board.sideToMove())) {
+          eval_triggered = true;
+          board_trigger = board;
+          eval_trigger = eval;
+          move_trigger = uci::parseSan(board, move, moves);
+        } else
+          eval_triggered = false;
+      }
+      if (agree_before && eval < -eval_before && depth >= min_depth) {
+        // see if opponent agrees with eval before blunder
+        eval2_triggered = true;
+      } else
+        eval2_triggered = false;
     }
 
     try {
@@ -198,6 +203,7 @@ public:
           });
     }
 
+    fen = constants::STARTPOS;
     board.set960(false);
     board.setFen(constants::STARTPOS);
 
@@ -217,11 +223,13 @@ private:
   const map_fens &fixfen_map;
   int eval_before, eval_after;
   bool agree_before;
+  int min_depth;
   std::mutex &progress_output;
 
   Board board;
   Movelist moves;
 
+  std::string fen = constants::STARTPOS;
   bool skip = false;
 
   bool do_filter = false;
@@ -239,7 +247,7 @@ private:
 
 void ana_files(const std::vector<std::string> &files,
                const std::string &regex_engine, const map_fens &fixfen_map,
-               int eval_before, int eval_after, bool agree_before,
+               int eval_before, int eval_after, bool agree_before, int min_depth,
                std::mutex &progress_output) {
 
   for (const auto &file : files) {
@@ -247,7 +255,7 @@ void ana_files(const std::vector<std::string> &files,
     const auto pgn_iterator = [&](std::istream &iss) {
       auto vis =
           std::make_unique<Analyze>(file, regex_engine, fixfen_map, eval_before,
-                                    eval_after, agree_before, progress_output);
+                                    eval_after, agree_before, min_depth, progress_output);
 
       pgn::StreamParser parser(iss);
 
@@ -482,7 +490,7 @@ public:
 
 void process(const std::vector<std::string> &files_pgn,
              const std::string &regex_engine, const map_fens &fixfen_map,
-             int eval_before, int eval_after, bool agree_before,
+             int eval_before, int eval_after, bool agree_before, int min_depth,
              int concurrency) {
   // Create more chunks than threads to prevent threads from idling.
   int target_chunks = 4 * concurrency;
@@ -501,9 +509,9 @@ void process(const std::vector<std::string> &files_pgn,
   for (const auto &files : files_chunked) {
 
     pool.enqueue([&files, &regex_engine, &fixfen_map, &eval_before, &eval_after,
-                  &agree_before, &progress_output, &files_chunked]() {
+                  &agree_before, &min_depth, &progress_output, &files_chunked]() {
       analysis::ana_files(files, regex_engine, fixfen_map, eval_before,
-                          eval_after, agree_before, progress_output);
+                          eval_after, agree_before, min_depth, progress_output);
     });
   }
 
@@ -533,6 +541,7 @@ void print_usage(char const *program_name) {
     ss << "  --evalBefore <cp>     Evaluation in cp before blunder (default: 200)" << "\n";
     ss << "  --evalAfter <cp>      Evaluation in cp after blunder (default: 50)" << "\n";
     ss << "  --agreeBefore         Require both engines' evaluations above evalBefore" << "\n";
+    ss << "  --minDepth            Minimal depth needed to accept an eval (default: 0)" << "\n";
     ss << "  --help                Print this help message" << "\n";
   // clang-format on
 
@@ -546,7 +555,7 @@ int main(int argc, char const *argv[]) {
   std::string default_path = "./pgns";
   std::string regex_engine, regex_book, filename = "blundersieve.epd";
   map_fens fixfen_map;
-  int eval_before = 200, eval_after = 50;
+  int eval_before = 200, eval_after = 50, min_depth = 0;
   int concurrency = std::max(1, int(std::thread::hardware_concurrency()));
 
   if (cmd.has_argument("--help", true)) {
@@ -647,6 +656,9 @@ int main(int argc, char const *argv[]) {
     eval_after = std::stoi(cmd.get_argument("--evalAfter"));
   }
   bool agree_on_eval_before = cmd.has_argument("--agreeBefore", true);
+  if (cmd.has_argument("--minDepth")) {
+    min_depth = std::stoi(cmd.get_argument("--minDepth"));
+  }
 
   if (cmd.has_argument("-o")) {
     filename = cmd.get_argument("-o");
@@ -657,7 +669,7 @@ int main(int argc, char const *argv[]) {
   const auto t0 = std::chrono::high_resolution_clock::now();
 
   process(files_pgn, regex_engine, fixfen_map, eval_before, eval_after,
-          agree_on_eval_before, concurrency);
+          agree_on_eval_before, min_depth, concurrency);
 
   for (const auto &pair : fen_map) {
     std::string fen = pair.first;

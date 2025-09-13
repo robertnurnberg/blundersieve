@@ -28,11 +28,12 @@ Options:
   --matchThreads <N>    Filter data based on used threads in metadata
   --matchBook <regex>   Filter data based on book name
   --matchBookInvert     Invert the filter
-  -o <path>             Path to output epd file (default: matesieve.epd)
+  -o <path>             Path to output epd file (default: blundersieve.epd)
   --fixFENsource        Patch move counters lost by cutechess-cli based on FENs in this file
   --evalBefore <cp>     Evaluation in cp before blunder (default: 200)
   --evalAfter <cp>      Evaluation in cp after blunder (default: 50)
   --agreeBefore         Require both engines' evaluations above evalBefore
+  --minDepth            Minimal depth needed to accept an eval (default: 0)
   --help                Print this help message
 ```
 
