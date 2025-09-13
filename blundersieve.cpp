@@ -49,7 +49,8 @@ public:
           bool agree_before, int min_depth, std::mutex &progress_output)
       : file(file), regex_engine(regex_engine), fixfen_map(fixfen_map),
         eval_before(eval_before), eval_after(eval_after),
-        agree_before(agree_before), min_depth(min_depth), progress_output(progress_output) {}
+        agree_before(agree_before), min_depth(min_depth),
+        progress_output(progress_output) {}
 
   virtual ~Analyze() {}
 
@@ -142,8 +143,8 @@ public:
       if (match_eval[1] == 'M')
         eval = match_eval[0] == '+' ? 30001 : -30001;
       else
-        eval = std::clamp(int(100 * fast_stof(match_eval.data())), -30000,
-                          30000);
+        eval =
+            std::clamp(int(100 * fast_stof(match_eval.data())), -30000, 30000);
       const auto match_depth = comment.substr(slash_pos + 1, space_pos);
       int depth = std::max(1, std::stoi(match_depth.data()));
       if (eval_triggered) {
@@ -247,15 +248,15 @@ private:
 
 void ana_files(const std::vector<std::string> &files,
                const std::string &regex_engine, const map_fens &fixfen_map,
-               int eval_before, int eval_after, bool agree_before, int min_depth,
-               std::mutex &progress_output) {
+               int eval_before, int eval_after, bool agree_before,
+               int min_depth, std::mutex &progress_output) {
 
   for (const auto &file : files) {
     std::string move_counter;
     const auto pgn_iterator = [&](std::istream &iss) {
-      auto vis =
-          std::make_unique<Analyze>(file, regex_engine, fixfen_map, eval_before,
-                                    eval_after, agree_before, min_depth, progress_output);
+      auto vis = std::make_unique<Analyze>(
+          file, regex_engine, fixfen_map, eval_before, eval_after, agree_before,
+          min_depth, progress_output);
 
       pgn::StreamParser parser(iss);
 
@@ -509,7 +510,8 @@ void process(const std::vector<std::string> &files_pgn,
   for (const auto &files : files_chunked) {
 
     pool.enqueue([&files, &regex_engine, &fixfen_map, &eval_before, &eval_after,
-                  &agree_before, &min_depth, &progress_output, &files_chunked]() {
+                  &agree_before, &min_depth, &progress_output,
+                  &files_chunked]() {
       analysis::ana_files(files, regex_engine, fixfen_map, eval_before,
                           eval_after, agree_before, min_depth, progress_output);
     });
