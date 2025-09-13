@@ -143,7 +143,7 @@ public:
           eval = std::clamp(int(100 * fast_stof(match_eval.data())), -30000,
                             30000);
         if (eval_triggered) {
-          // previous move triggered blunder alert, now check if blundered
+          // previous move triggered eval_before, now check if blundered
           if (eval > -eval_after) {
             found_blunder = true;
             board_blunder = board_trigger;
@@ -153,7 +153,7 @@ public:
           eval_triggered = false;
         }
         if (!agree_before || eval2_triggered) {
-          // see if side to move thinks it is better
+          // see if "blundering" side thinks it is better
           if (eval > eval_before) {
             eval_triggered = true;
             board_trigger = board;
@@ -163,7 +163,7 @@ public:
             eval_triggered = false;
         }
         if (agree_before && eval < -eval_before) {
-          // see if "blundering" side agrees with won eval for opponent
+          // see if opponent agrees with eval before blunder
           eval2_triggered = true;
         } else
           eval2_triggered = false;
