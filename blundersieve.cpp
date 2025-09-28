@@ -677,7 +677,7 @@ int main(int argc, char const *argv[]) {
     std::string fen = pair.first;
     auto board = Board(fen);
     out_file << fen << " c0 \"eval: " << pair.second.first
-             << ", blunder: " << pair.second.second << "\";\n";
+             << ", blunder: " << uci::moveToUci(pair.second.second) << "\";\n";
   }
   out_file.close();
 
